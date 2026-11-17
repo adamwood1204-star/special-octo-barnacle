@@ -15,7 +15,7 @@ jobs:
 
     steps:
       - name: Check out project
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
@@ -24,21 +24,29 @@ jobs:
           java-version: '17'
 
       - name: Install Android SDK packages
+        shell: bash
         run: |
-          sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager -print -quit)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo 'Android sdkmanager not found'
+            exit 1
+          fi
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" 'platforms;android-35' 'build-tools;35.0.0'
 
-      - name: Install Gradle
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Extract Christmas App
+      - name: Extract Christmas app
+        shell: bash
         run: |
           test -f christmas_organiser_android_source.zip
           unzip -q christmas_organiser_android_source.zip
           test -f christmas_organiser_android/app/build.gradle
 
-      - name: Build Android APK
+      - name: Build Laura's Christmas App APK
         working-directory: christmas_organiser_android
         run: gradle --no-daemon assembleDebug
 
