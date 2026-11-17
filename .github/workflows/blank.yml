@@ -1,5 +1,5 @@
 
-name: Build Laura's Christmas App APK
+name: Build Laura's Christmas App - Hidden Elf Ideas
 
 on:
   push:
@@ -40,19 +40,279 @@ jobs:
           gradle-version: '8.9'
 
       - name: Extract Christmas app
-        shell: bash
         run: |
           test -f christmas_organiser_android_source.zip
-          unzip -q christmas_organiser_android_source.zip
-          test -f christmas_organiser_android/app/build.gradle
+          unzip -oq christmas_organiser_android_source.zip
 
-      - name: Build Laura's Christmas App APK
+      - name: Apply hidden Elf Ideas and frosty blue update
+        shell: bash
+        run: |
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          import re
+
+          root = Path('christmas_organiser_android')
+          assets = root / 'app/src/main/assets'
+          html_file = assets / 'index.html'
+          js_file = assets / 'app.js'
+          css_file = assets / 'styles.css'
+
+          assert html_file.is_file() and js_file.is_file() and css_file.is_file(), 'App sources missing'
+
+          html = html_file.read_text(encoding='utf-8')
+          js = js_file.read_text(encoding='utf-8')
+          css = css_file.read_text(encoding='utf-8')
+
+          # Make the app title the secret shortcut.
+          if 'id="secret-elf-trigger"' not in html:
+              html, count = re.subn(
+                  r'<div class="brand">(.*?)</div>',
+                  r'<button type="button" class="brand brand-trigger" id="secret-elf-trigger" aria-label="Laura&#39;s Christmas App">\1</button>',
+                  html, count=1, flags=re.S
+              )
+              if count != 1:
+                  raise RuntimeError('App title not found')
+
+          # Remove Elf Ideas from bottom navigation.
+          html = re.sub(
+              r'<button\b[^>]*\bdata-page=["\']elf["\'][^>]*>.*?</button>\s*',
+              '', html, flags=re.S
+          )
+          html_file.write_text(html, encoding='utf-8')
+
+          # Remove visible Elf Ideas and Santa's Helper home tiles.
+          js = re.sub(
+              r'(?m)^\s*\$\{quick\(["\']elf["\'][^\n]*\n?',
+              '\n', js
+          )
+
+          # Keep the original ideas but restore their name.
+          js = js.replace(
+              "header('North Pole mischief','Elf on the Shelf'",
+              "header('North Pole mischief','Elf Ideas'"
+          )
+          js = js.replace(
+              'header(\'North Pole mischief\',"Santa\'s Helper"',
+              "header('North Pole mischief','Elf Ideas'"
+          )
+          js = js.replace(
+              "<div class=\"list-title\">Santa's Helper ideas",
+              '<div class="list-title">Elf Ideas'
+          )
+
+          # Remove previous password requirement for backup.
+          js = js.replace(
+              'if(button.dataset.backup){requestBackup();return}',
+              'if(button.dataset.backup){backup();return}'
+          )
+
+          # Add secret five-tap access to older app versions.
+          if 'SNOWFLAKE_SECRET_5TAP_V13' not in js and 'function titleTap(){' not in js:
+              if 'const pages=' not in js or 'function navigate(' not in js:
+                  raise RuntimeError('App navigation not found')
+
+              js += r'''
+
+          // SNOWFLAKE_SECRET_5TAP_V13
+          (() => {
+            let elfOpen = false;
+            let count = 0;
+            let lastTap = 0;
+
+            const oldElf = pages.elf;
+            const oldNavigate = navigate;
+
+            pages.elf = function() {
+              if (!elfOpen) return home();
+              if (typeof helperUnlocked !== 'undefined') {
+                helperUnlocked = true;
+              }
+              return oldElf();
+            };
+
+            navigate = function(page) {
+              if (page === 'elf' && !elfOpen) return;
+
+              if (page !== 'elf') {
+                elfOpen = false;
+                count = 0;
+                if (typeof helperUnlocked !== 'undefined') {
+                  helperUnlocked = false;
+                }
+              }
+
+              return oldNavigate(page);
+            };
+
+            function hideElf() {
+              elfOpen = false;
+              count = 0;
+
+              if (typeof helperUnlocked !== 'undefined') {
+                helperUnlocked = false;
+              }
+
+              if (ui.page === 'elf') {
+                closeModal();
+                ui.page = 'home';
+                render();
+              }
+            }
+
+            const title = document.getElementById('secret-elf-trigger');
+
+            if (!title) {
+              throw new Error('Secret Elf shortcut missing');
+            }
+
+            title.addEventListener('click', function() {
+              if (ui.page !== 'home') {
+                count = 0;
+                return;
+              }
+
+              const now = Date.now();
+              count = (now - lastTap <= 4500) ? count + 1 : 1;
+              lastTap = now;
+
+              if (count === 5) {
+                count = 0;
+                elfOpen = true;
+
+                if (typeof helperUnlocked !== 'undefined') {
+                  helperUnlocked = true;
+                }
+
+                navigate('elf');
+              }
+            });
+
+            document.addEventListener('click', function(event) {
+              if (!event.target.closest('#secret-elf-trigger')) {
+                count = 0;
+              }
+            });
+
+            document.addEventListener('visibilitychange', function() {
+              if (document.hidden) hideElf();
+            });
+
+            window.addEventListener('pagehide', hideElf);
+            window.appLockHelper = hideElf;
+          })();
+          '''
+
+          js_file.write_text(js, encoding='utf-8')
+
+          # Frosty ice-blue Christmas theme.
+          css += '''
+          :root {
+            --green:#124b7b;
+            --deep:#092a4f;
+            --mint:#e2f5ff;
+            --cream:#f4faff;
+            --red:#2078b8;
+            --red2:#389bd7;
+            --gold:#c2edff;
+            --ink:#173956;
+            --muted:#5e7e99;
+            --border:#c9e3f3;
+          }
+          html { background:#e7f3fc; }
+          body {
+            background:linear-gradient(180deg,#e1f3ff 0%,#f8fcff 55%,#e6f4ff 100%);
+            color:#173956;
+          }
+          .topbar {
+            background:linear-gradient(110deg,#081e40,#0a4274 55%,#155d91);
+            border-bottom:1px solid #84cfff77;
+          }
+          .brand b {
+            color:#daf5ff;
+            text-shadow:0 0 12px #bcefff9a;
+          }
+          .brand-trigger {
+            appearance:none;
+            border:0;
+            background:transparent;
+            margin:0;
+            padding:0;
+            color:inherit;
+            text-align:left;
+            touch-action:manipulation;
+            user-select:none;
+            -webkit-user-select:none;
+          }
+          .brand-trigger:focus-visible {
+            outline:2px solid #d6f5ff;
+            outline-offset:4px;
+            border-radius:4px;
+          }
+          .hero {
+            background:linear-gradient(130deg,#061c3c,#0a376a 60%,#125b90);
+            border:1px solid #9de7ff8c;
+          }
+          .btn.primary {
+            background:linear-gradient(130deg,#0a588e,#249ed6);
+          }
+          .btn.green {
+            background:linear-gradient(120deg,#0b4e82,#1678ad);
+          }
+          .btn.secondary {
+            background:#eaf6ff;
+            border-color:#c5e7fa;
+            color:#0b548c;
+          }
+          .edit-btn {
+            background:linear-gradient(125deg,#fafdff,#d4f1ff,#edfaff);
+            border:1px solid #9fd7f5;
+            color:#12618f;
+            box-shadow:0 2px 0 #a8cde6,0 0 13px #bde9ff88;
+          }
+          .bottom-nav {
+            background:#f8fcfffa;
+            border-color:#c9e4f5;
+          }
+          .bottom-nav button.active {
+            background:linear-gradient(145deg,#e7f7ff,#c9edff);
+            color:#0d4d83;
+          }
+          .snowflakes i {
+            color:#7fcff8;
+            text-shadow:0 0 7px #a9e6ff;
+          }
+          '''
+          css_file.write_text(css, encoding='utf-8')
+
+          # Set the new version number.
+          gradle_file = root / 'app/build.gradle'
+          gradle = gradle_file.read_text(encoding='utf-8')
+
+          gradle = re.sub(
+              r'\bversionCode\s+\d+',
+              'versionCode 3', gradle
+          )
+          gradle = re.sub(
+              r"\bversionName\s+['\"][^'\"]+['\"]",
+              "versionName '1.3.0'", gradle
+          )
+          gradle_file.write_text(gradle, encoding='utf-8')
+
+          assert 'id="secret-elf-trigger"' in html
+          assert not re.search(r'data-page=["\']elf["\']', html)
+          assert not re.search(r'\$\{quick\(["\']elf["\']', js)
+          assert 'SNOWFLAKE_SECRET_5TAP_V13' in js or 'function titleTap(){' in js
+
+          print('Version 1.3: Hidden Elf Ideas and frosty blue theme ready')
+          PYCODE
+
+      - name: Build Android APK
         working-directory: christmas_organiser_android
         run: gradle --no-daemon assembleDebug
 
-      - name: Upload APK
+      - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
-          name: Lauras-Christmas-App-APK
+          name: Lauras-Christmas-App-Hidden-Elf-APK
           path: christmas_organiser_android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
