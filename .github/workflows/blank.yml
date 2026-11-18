@@ -1,5 +1,5 @@
 
-name: Build Laura's Christmas App v2.1 - Connection Fix
+name: "Build Laura's Christmas App v2.1 - Connection Fix"
 
 on:
   push:
@@ -47,16 +47,16 @@ jobs:
       - name: Extract Version 2.1
         shell: bash
         run: |
-          test -f lauras_christmas_v21_connected_source.zip || {
-            echo "::error::Upload the Version 2.1 source ZIP"
+          if [ ! -f lauras_christmas_v21_connected_source.zip ]; then
+            echo "::error::Upload lauras_christmas_v21_connected_source.zip to the repository root first"
             exit 1
-          }
+          fi
 
           unzip -oq lauras_christmas_v21_connected_source.zip
 
           test -f christmas_organiser_android/app/build.gradle
 
-      - name: Verify connection fix
+      - name: Verify Version 2.1 connection fix
         shell: bash
         run: |
           APP=christmas_organiser_android
@@ -67,11 +67,11 @@ jobs:
           }
 
           grep -Fq 'checkConnection()' "$APP/app/src/main/java/uk/co/christmas/organiser/MainActivity.java" || {
-            echo "::error::Connection fix missing"
+            echo "::error::Connection test missing"
             exit 1
           }
 
-          echo "Version 2.1 verified"
+          echo "Version 2.1 connection fix verified"
 
       - name: Build Android APK
         working-directory: christmas_organiser_android
