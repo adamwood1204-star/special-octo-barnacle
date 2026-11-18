@@ -1,5 +1,5 @@
 
-name: "Build Laura's Christmas App v2.1 - Connection Fix"
+name: Build Laura's Christmas App v2.1.1 - Fix News and AI
 
 on:
   push:
@@ -11,7 +11,6 @@ permissions:
 
 jobs:
   build:
-    name: Build Christmas App v2.1
     runs-on: ubuntu-24.04
 
     steps:
@@ -24,54 +23,293 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android SDK packages
+      - name: Set up Android SDK
         shell: bash
         run: |
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager -print -quit)"
-
-          if [ -z "$SDKMANAGER" ]; then
-            echo "::error::Android SDK manager not found"
-            exit 1
-          fi
-
+          test -n "$SDKMANAGER" || { echo "::error::Android SDK missing"; exit 1; }
           "$SDKMANAGER" --sdk_root="$SDK_ROOT" \
-            'platforms;android-35' \
-            'build-tools;35.0.0'
+            'platforms;android-35' 'build-tools;35.0.0'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Extract Version 2.1
+      - name: Unpack existing Version 2 app
         shell: bash
         run: |
-          if [ ! -f lauras_christmas_v21_connected_source.zip ]; then
-            echo "::error::Upload lauras_christmas_v21_connected_source.zip to the repository root first"
+          test -f lauras_christmas_v2_source.zip || {
+            echo "::error::Existing V2 ZIP missing"
             exit 1
-          fi
-
-          unzip -oq lauras_christmas_v21_connected_source.zip
-
+          }
+          unzip -oq lauras_christmas_v2_source.zip
           test -f christmas_organiser_android/app/build.gradle
 
-      - name: Verify Version 2.1 connection fix
+      - name: Apply internet and AI fixes
         shell: bash
         run: |
-          APP=christmas_organiser_android
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import re
 
-          grep -Fq "versionName '2.1.0'" "$APP/app/build.gradle" || {
-            echo "::error::Wrong app version"
-            exit 1
+          r=Path('christmas_organiser_android')
+          jf=r/'app/src/main/java/uk/co/christmas/organiser/MainActivity.java'
+          sf=r/'app/src/main/assets/app.js'
+          gf=r/'app/build.gradle'
+
+          j=jf.read_text()
+          s=sf.read_text()
+          g=gf.read_text()
+
+          assert "versionName '2.0.0'" in g
+          assert 'Christmas Scout' in s
+          assert 'android.permission.INTERNET' in (r/'app/src/main/AndroidManifest.xml').read_text()
+
+          j=j.replace(
+              'Executors.newSingleThreadExecutor()',
+              'Executors.newFixedThreadPool(3)',1
+          )
+
+          needle='''        public void fetchNews() {
+                      executor.submit(() -> callback("onNativeNews", requestNews()));
+                  }
+          '''
+
+          assert needle in j
+
+          j=j.replace(needle,needle+'''
+                  @JavascriptInterface
+                  public void checkConnection() {
+                      executor.submit(() -> callback("onNativeConnection", checkNetwork()));
+                  }
+          ''',1)
+
+          start=j.index('    private JSONObject requestNews() {')
+          end=j.index('    private String childText(',start)
+
+          j=j[:start]+'''    private String netError(Exception e) {
+                  if (e instanceof java.net.UnknownHostException) return "DNS lookup failed";
+                  if (e instanceof java.net.SocketTimeoutException) return "Connection timed out";
+                  if (e instanceof javax.net.ssl.SSLException) return "HTTPS connection error";
+                  return "Network error: " + e.getClass().getSimpleName();
+              }
+
+              private JSONObject checkNetwork() {
+                  JSONArray checks = new JSONArray();
+                  String[][] sites = {
+                      {"Internet", "https://www.google.com/generate_204"},
+                      {"News", "https://news.google.com/rss/search?q=Christmas%20UK&hl=en-GB&gl=GB&ceid=GB%3Aen"},
+                      {"OpenAI", "https://api.openai.com/v1/models"}
+                  };
+
+                  try {
+                      for (String[] site : sites) {
+                          JSONObject row = new JSONObject();
+                          row.put("name", site[0]);
+                          HttpURLConnection c = null;
+
+                          try {
+                              c = (HttpURLConnection) new URL(site[1]).openConnection();
+                              c.setConnectTimeout(6500);
+                              c.setReadTimeout(6500);
+                              int status = c.getResponseCode();
+
+                              row.put("ok", status >= 200 && status < 500);
+                              row.put("detail", "HTTP " + status +
+                                  (status == 401 && site[0].equals("OpenAI")
+                                  ? " (server reachable)" : ""));
+
+                          } catch (Exception e) {
+                              row.put("ok", false);
+                              row.put("detail", netError(e));
+                          } finally {
+                              if (c != null) c.disconnect();
+                          }
+
+                          checks.put(row);
+                      }
+
+                      return new JSONObject().put("ok", true).put("checks", checks);
+
+                  } catch (Exception e) {
+                      return error("Connection test unavailable");
+                  }
+              }
+
+              private JSONObject requestNews() {
+                  String[] urls = {
+                      "https://news.google.com/rss/search?q=Christmas%20UK&hl=en-GB&gl=GB&ceid=GB%3Aen",
+                      "https://www.bing.com/news/search?q=Christmas+UK&format=rss"
+                  };
+
+                  String failure = "No articles found";
+
+                  for (String address : urls) {
+                      HttpURLConnection c = null;
+
+                      try {
+                          c = (HttpURLConnection) new URL(address).openConnection();
+                          c.setConnectTimeout(9000);
+                          c.setReadTimeout(12000);
+                          c.setRequestProperty("User-Agent", "Mozilla/5.0 LauraChristmas/2.1");
+
+                          int status = c.getResponseCode();
+
+                          if (status != 200) {
+                              failure = "News HTTP " + status;
+                              continue;
+                          }
+
+                          String xml = readStream(c.getInputStream(), 600000);
+                          DocumentBuilderFactory f = DocumentBuilderFactory.newInstance();
+
+                          f.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+                          f.setFeature("http://xml.org/sax/features/external-general-entities", false);
+                          f.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+
+                          Document doc = f.newDocumentBuilder().parse(
+                              new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8))
+                          );
+
+                          NodeList nodes = doc.getElementsByTagName("item");
+                          JSONArray items = new JSONArray();
+
+                          for (int i=0; i<nodes.getLength() && items.length()<12; i++) {
+                              Element el = (Element)nodes.item(i);
+                              String title = childText(el,"title");
+                              String link = childText(el,"link");
+
+                              if (title.isEmpty() || !link.startsWith("https://")) continue;
+
+                              items.put(
+                                  new JSONObject()
+                                      .put("title",title)
+                                      .put("url",link)
+                                      .put("date",childText(el,"pubDate"))
+                                      .put("source",childText(el,"source"))
+                              );
+                          }
+
+                          if (items.length()>0) {
+                              return new JSONObject()
+                                  .put("ok",true)
+                                  .put("items",items);
+                          }
+
+                      } catch(Exception e) {
+                          failure=netError(e);
+                      } finally {
+                          if (c!=null) c.disconnect();
+                      }
+                  }
+
+                  return error("Christmas news unavailable: "+failure+". Try Test connection.");
+              }
+
+          '''+j[end:]
+
+          j=j.replace(
+              'if (key.isEmpty()) return error("Set up an OpenAI API key in Settings first.");',
+              '''if (key.isEmpty()) return error("Add an OpenAI API key in Settings.");
+                  if (!key.startsWith("sk-")) return error("That key is not an OpenAI API key. Get one at platform.openai.com/api-keys.");''',
+              1
+          )
+
+          j=j.replace(
+              'return error("AI request returned HTTP " + code + ". Check your API key, billing, or internet connection.");',
+              '''if (code == 401) return error("OpenAI 401: invalid API key. Update it in Settings.");
+                          if (code == 429) return error("OpenAI 429: billing or usage limit.");
+                          return error("OpenAI HTTP " + code + ": check API permissions or model access.");''',
+              1
+          )
+
+          j=j.replace(
+              'return error("Could not reach the AI service. Please check internet access and try again.");',
+              'return error("OpenAI: " + netError(e));',
+              1
+          )
+
+          jf.write_text(j)
+
+          assert 'newsBusy:false,aiBusy:false' in s
+
+          s=s.replace(
+              'newsBusy:false,aiBusy:false',
+              'newsBusy:false,connectionBusy:false,connectionChecks:[],aiBusy:false',
+              1
+          )
+
+          header='<div class="section-head"><h2>🤖 Ask Christmas Scout AI</h2>'
+
+          assert header in s
+
+          s=s.replace(header,'''<div class="panel frost">
+          <strong>🌐 Test internet connection</strong>
+          <p class="item-sub">Checks News and OpenAI individually.</p>
+          <button class="btn secondary" data-check-net="1">
+          ${ui.connectionBusy?'Testing…':'Test connection'}
+          </button>
+          ${ui.connectionChecks.map(c=>`<p class="item-sub">${c.ok?'✅':'❌'} ${x(c.name)}: ${x(c.detail)}</p>`).join('')}
+          </div>'''+header,1)
+
+          s=s.replace(
+              'if(d.refreshNews){fetchNews(true);return}',
+              'if(d.checkNet){checkNet();return}\n if(d.refreshNews){fetchNews(true);return}',
+              1
+          )
+
+          needle='function aiAsk(prompt)'
+          assert needle in s
+
+          s=s.replace(needle,'''function checkNet(){
+           if(ui.connectionBusy)return;
+           if(!window.AndroidStore?.checkConnection)return toast('Connection test unavailable');
+           ui.connectionBusy=true;
+           ui.connectionChecks=[];
+           render();
+           AndroidStore.checkConnection();
           }
 
-          grep -Fq 'checkConnection()' "$APP/app/src/main/java/uk/co/christmas/organiser/MainActivity.java" || {
-            echo "::error::Connection test missing"
-            exit 1
-          }
+          window.onNativeConnection=function(data){
+           ui.connectionBusy=false;
+           try{
+             ui.connectionChecks=JSON.parse(data).checks||[];
+           }catch(e){
+             toast('Connection test failed');
+           }
+           if(ui.page==='updates')render();
+          };
+          '''+needle,1)
 
-          echo "Version 2.1 connection fix verified"
+          s=s.replace(
+              'Version 2.0 • Frosty Blue',
+              'Version 2.1.1 • Frosty Blue',1
+          )
+
+          sf.write_text(s)
+
+          g=re.sub(
+              r'\bversionCode\s+\d+',
+              'versionCode 211',
+              g.replace("versionName '2.0.0'", "versionName '2.1.1'")
+          )
+
+          gf.write_text(g)
+
+          assert 'void checkConnection()' in j
+          assert 'data-check-net="1"' in s
+
+          print('Laura v2.1.1 connection fixes applied')
+          PYTHON
+
+      - name: Verify updated code
+        shell: bash
+        run: |
+          grep -Fq "versionName '2.1.1'" christmas_organiser_android/app/build.gradle
+          grep -Fq 'void checkConnection()' christmas_organiser_android/app/src/main/java/uk/co/christmas/organiser/MainActivity.java
+          node --check christmas_organiser_android/app/src/main/assets/app.js
 
       - name: Build Android APK
         working-directory: christmas_organiser_android
@@ -81,14 +319,13 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-
           cp christmas_organiser_android/app/build/outputs/apk/debug/app-debug.apk \
-            dist/Lauras-Christmas-App-v2-1.apk
+            dist/Lauras-Christmas-App-v2-1-1.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Lauras-Christmas-App-v2-1-Connection-Fix
-          path: dist/Lauras-Christmas-App-v2-1.apk
+          name: Lauras-Christmas-App-v2-1-1
+          path: dist/Lauras-Christmas-App-v2-1-1.apk
           if-no-files-found: error
           retention-days: 30
