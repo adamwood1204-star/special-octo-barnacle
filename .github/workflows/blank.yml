@@ -28,11 +28,10 @@ jobs:
         shell: bash
         run: |
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
-
           SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager -print -quit)"
 
           if [ -z "$SDKMANAGER" ]; then
-            echo "Android SDK manager not found"
+            echo "::error::Android SDK manager not found"
             exit 1
           fi
 
@@ -48,53 +47,45 @@ jobs:
       - name: Extract Laura's Christmas App V2
         shell: bash
         run: |
-          if [ ! -f christmas_organiser_android_source.zip ]; then
-            echo "::error::App source ZIP is missing"
+          test -f christmas_organiser_android_source.zip || {
+            echo "::error::Upload christmas_organiser_android_source.zip to the repository root"
             exit 1
-          fi
-
+          }
           unzip -oq christmas_organiser_android_source.zip
+          test -f christmas_organiser_android/app/build.gradle
 
-          if [ ! -f christmas_organiser_android/app/build.gradle ]; then
-            echo "::error::Android project not found"
-            exit 1
-          fi
-
-          echo "Android project extracted successfully"
-
-      - name: Check for Version 2 AI features
+      - name: Confirm new Version 2 source
         shell: bash
         run: |
-          APP_ASSETS="christmas_organiser_android/app/src/main/assets"
+          APP_DIR="christmas_organiser_android"
+          APP_JS="$APP_DIR/app/src/main/assets/app.js"
+          APP_GRADLE="$APP_DIR/app/build.gradle"
+          test -f "$APP_JS"
 
-          if [ ! -d "$APP_ASSETS" ]; then
-            echo "::error::App assets are missing"
+          if ! grep -q 'Christmas Scout' "$APP_JS"; then
+            echo "::error::Old ZIP detected. Replace christmas_organiser_android_source.zip with the new V2 file."
             exit 1
           fi
 
-          if ! grep -Riq "Christmas Scout" "$APP_ASSETS"; then
-            echo "::error::This appears to be the old app ZIP. Upload the new Version 2 source ZIP."
+          if ! grep -q "versionName '2.0.0'" "$APP_GRADLE"; then
+            echo "::error::Version 2.0.0 was not found in the source ZIP."
             exit 1
           fi
 
-          echo "Version 2 features detected"
+          echo "Correct Version 2 source confirmed"
 
-      - name: Build Laura's Christmas App
+      - name: Build Laura's Christmas App V2 APK
         working-directory: christmas_organiser_android
-        run: |
-          gradle --no-daemon --stacktrace assembleDebug
+        run: gradle --no-daemon --stacktrace assembleDebug
 
-      - name: Prepare Version 2 APK
+      - name: Rename APK
         shell: bash
         run: |
           mkdir -p dist
-
           cp christmas_organiser_android/app/build/outputs/apk/debug/app-debug.apk \
             dist/Lauras-Christmas-App-V2.apk
 
-          echo "Laura's Christmas App V2 APK ready"
-
-      - name: Upload Android APK
+      - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
           name: Lauras-Christmas-App-V2
