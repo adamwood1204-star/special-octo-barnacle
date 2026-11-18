@@ -1,5 +1,5 @@
 
-name: Build Laura's Christmas App V2 APK
+name: Build Laura's Christmas App V2 - New ZIP
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Check out project
+      - name: Check out repository
         uses: actions/checkout@v5
 
       - name: Set up Java 17
@@ -29,63 +29,68 @@ jobs:
         run: |
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager -print -quit)"
-
           if [ -z "$SDKMANAGER" ]; then
             echo "::error::Android SDK manager not found"
             exit 1
           fi
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" 'platforms;android-35' 'build-tools;35.0.0'
 
-          "$SDKMANAGER" --sdk_root="$SDK_ROOT" \
-            'platforms;android-35' \
-            'build-tools;35.0.0'
-
-      - name: Set up Gradle
+      - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Extract Laura's Christmas App V2
+      - name: Extract new Version 2 ZIP
         shell: bash
         run: |
-          test -f christmas_organiser_android_source.zip || {
-            echo "::error::Upload christmas_organiser_android_source.zip to the repository root"
+          if [ ! -f lauras_christmas_v2_source.zip ]; then
+            echo "::error::Upload lauras_christmas_v2_source.zip to the repository root"
             exit 1
-          }
-          unzip -oq christmas_organiser_android_source.zip
+          fi
+
+          unzip -oq lauras_christmas_v2_source.zip
+
           test -f christmas_organiser_android/app/build.gradle
 
-      - name: Confirm new Version 2 source
+      - name: Verify new app features
         shell: bash
         run: |
-          APP_DIR="christmas_organiser_android"
-          APP_JS="$APP_DIR/app/src/main/assets/app.js"
-          APP_GRADLE="$APP_DIR/app/build.gradle"
-          test -f "$APP_JS"
+          APP_JS=christmas_organiser_android/app/src/main/assets/app.js
+          APP_GRADLE=christmas_organiser_android/app/build.gradle
 
-          if ! grep -q 'Christmas Scout' "$APP_JS"; then
-            echo "::error::Old ZIP detected. Replace christmas_organiser_android_source.zip with the new V2 file."
+          grep -q 'Christmas Scout' "$APP_JS" || {
+            echo '::error::Christmas Scout is missing'
             exit 1
-          fi
+          }
 
-          if ! grep -q "versionName '2.0.0'" "$APP_GRADLE"; then
-            echo "::error::Version 2.0.0 was not found in the source ZIP."
+          grep -q 'secretTitleTap' "$APP_JS" || {
+            echo '::error::Hidden Elf Ideas is missing'
             exit 1
-          fi
+          }
 
-          echo "Correct Version 2 source confirmed"
+          grep -q 'presentIconTap' "$APP_JS" || {
+            echo '::error::Hidden Present Lists are missing'
+            exit 1
+          }
 
-      - name: Build Laura's Christmas App V2 APK
+          grep -q "versionName '2.0.0'" "$APP_GRADLE" || {
+            echo '::error::Wrong app version'
+            exit 1
+          }
+
+          echo 'Version 2 verified'
+
+      - name: Build Android APK
         working-directory: christmas_organiser_android
         run: gradle --no-daemon --stacktrace assembleDebug
 
-      - name: Rename APK
+      - name: Name APK
         shell: bash
         run: |
           mkdir -p dist
-          cp christmas_organiser_android/app/build/outputs/apk/debug/app-debug.apk \
-            dist/Lauras-Christmas-App-V2.apk
+          cp christmas_organiser_android/app/build/outputs/apk/debug/app-debug.apk dist/Lauras-Christmas-App-V2.apk
 
-      - name: Upload installable APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Lauras-Christmas-App-V2
