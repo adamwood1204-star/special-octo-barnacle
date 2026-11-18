@@ -1,5 +1,5 @@
 
-name: Build Laura's Christmas App V2 - New ZIP
+name: Build Laura's Christmas App v2.1 - Connection Fix
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Laura's Christmas App V2
+    name: Build Christmas App v2.1
     runs-on: ubuntu-24.04
 
     steps:
@@ -39,67 +39,56 @@ jobs:
             'platforms;android-35' \
             'build-tools;35.0.0'
 
-      - name: Set up Gradle 8.9
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Extract new Version 2 ZIP
+      - name: Extract Version 2.1
         shell: bash
         run: |
-          if [ ! -f lauras_christmas_v2_source.zip ]; then
-            echo "::error::Upload lauras_christmas_v2_source.zip to the repository root"
+          test -f lauras_christmas_v21_connected_source.zip || {
+            echo "::error::Upload the Version 2.1 source ZIP"
             exit 1
-          fi
+          }
 
-          unzip -oq lauras_christmas_v2_source.zip
+          unzip -oq lauras_christmas_v21_connected_source.zip
 
           test -f christmas_organiser_android/app/build.gradle
 
-      - name: Verify new app features
+      - name: Verify connection fix
         shell: bash
         run: |
-          APP_JS=christmas_organiser_android/app/src/main/assets/app.js
-          APP_GRADLE=christmas_organiser_android/app/build.gradle
+          APP=christmas_organiser_android
 
-          grep -q 'Christmas Scout' "$APP_JS" || {
-            echo "::error::Christmas Scout is missing"
-            exit 1
-          }
-
-          grep -q 'secretTitleTap' "$APP_JS" || {
-            echo "::error::Hidden Elf Ideas is missing"
-            exit 1
-          }
-
-          grep -q 'presentIconTap' "$APP_JS" || {
-            echo "::error::Hidden Present Lists are missing"
-            exit 1
-          }
-
-          grep -q "versionName '2.0.0'" "$APP_GRADLE" || {
+          grep -Fq "versionName '2.1.0'" "$APP/app/build.gradle" || {
             echo "::error::Wrong app version"
             exit 1
           }
 
-          echo "Version 2 verified"
+          grep -Fq 'checkConnection()' "$APP/app/src/main/java/uk/co/christmas/organiser/MainActivity.java" || {
+            echo "::error::Connection fix missing"
+            exit 1
+          }
+
+          echo "Version 2.1 verified"
 
       - name: Build Android APK
         working-directory: christmas_organiser_android
         run: gradle --no-daemon --stacktrace assembleDebug
 
-      - name: Name APK
+      - name: Rename APK
         shell: bash
         run: |
           mkdir -p dist
 
           cp christmas_organiser_android/app/build/outputs/apk/debug/app-debug.apk \
-            dist/Lauras-Christmas-App-V2.apk
+            dist/Lauras-Christmas-App-v2-1.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Lauras-Christmas-App-V2
-          path: dist/Lauras-Christmas-App-V2.apk
+          name: Lauras-Christmas-App-v2-1-Connection-Fix
+          path: dist/Lauras-Christmas-App-v2-1.apk
           if-no-files-found: error
           retention-days: 30
